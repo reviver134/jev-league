@@ -1,0 +1,55 @@
+<!doctype html><meta charset="utf-8"><title>Jev Football</title>
+<style>
+body{margin:0;background:#000;color:#fff;font:14px monospace}
+#hud{text-align:center;font-size:18px;padding:8px 0 2px}#ev{height:1.3em;color:#aaa;text-align:center}
+#wrap{display:flex;flex-wrap:wrap;justify-content:center;gap:14px;padding:6px}canvas{max-width:100%;cursor:pointer}
+#side{width:310px}button{background:#222;color:#fff;border:1px solid #555;padding:3px 9px;cursor:pointer;margin:0 3px 5px 0;font:inherit}
+button.on{border-color:#fff;background:#444}h4{margin:12px 0 4px;color:#aaa;font-weight:normal}
+.row{position:relative;margin:3px 0;padding:4px 7px;border:1px solid #333;overflow:hidden}.row i{position:absolute;left:0;top:0;bottom:0;background:#2d5a3d}
+.row span{position:relative;display:flex;justify-content:space-between;gap:8px}.row.top{border-color:#fff}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}.grid div{border:1px solid #333;padding:4px 6px}.grid small{color:#aaa;display:block}
+</style>
+<div id="hud"></div><div id="ev"></div>
+<div id="wrap"><canvas id="c"></canvas>
+<div id="side"><button id="pause">Pause / Resume</button><div id="pick"></div><div id="panel">Click a player (or a button) to see its decisions.</div></div></div>
+<script>
+const L=50,W=30,S=16,M=24,GW=5.0,c=document.getElementById('c'),x=c.getContext('2d');
+c.width=L*S+2*M;c.height=W*S+2*M;
+const COL={A:'#ff4d4d',B:'#4da6ff'};let sel=null,last=null,shown='';
+const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+ws.onmessage=e=>{last=JSON.parse(e.data);draw(last);panel(last)};
+document.getElementById('pause').onclick=()=>ws.send('toggle');
+c.onclick=e=>{if(!last)return;const r=c.getBoundingClientRect(),k=c.width/r.width,mx=((e.clientX-r.left)*k-M)/S,my=((e.clientY-r.top)*k-M)/S;
+  let best=null,bd=3;for(const[id,px,py]of last.players){const d=Math.hypot(px-mx,py-my);if(d<bd){bd=d;best=id}}if(best)pick(best)};
+function pick(id){sel=id;shown='';for(const b of document.querySelectorAll('#pick button'))b.classList.toggle('on',b.textContent===id);if(last)panel(last)}
+function circ(px,py,r,fill){x.beginPath();x.arc(px,py,r,0,7);fill?x.fill():x.stroke()}
+function draw(s){
+  x.fillStyle='#000';x.fillRect(0,0,c.width,c.height);
+  x.save();x.translate(M,M);x.scale(S,S);x.strokeStyle='#fff';x.lineWidth=.15;
+  x.strokeRect(0,0,L,W);x.beginPath();x.moveTo(L/2,0);x.lineTo(L/2,W);x.stroke();circ(L/2,W/2,5,false);
+  x.lineWidth=.6;x.beginPath();for(const gx of[0,L]){x.moveTo(gx,(W-GW)/2);x.lineTo(gx,(W+GW)/2)}x.stroke();
+  x.font='1.1px monospace';x.textAlign='center';
+  for(const[id,px,py]of s.players){x.fillStyle=COL[id[0]];circ(px,py,.7,true);
+    if(id===s.owner){x.lineWidth=.15;x.strokeStyle='#fff';circ(px,py,1.1,false)}
+    if(id===sel){x.lineWidth=.2;x.strokeStyle='#ff0';circ(px,py,1.5,false);x.fillStyle='#ff0';x.fillText(id,px,py-1.9)}}
+  const[bx,by,bz]=s.ball;x.fillStyle='rgba(255,255,255,.3)';circ(bx,by,.35,true);
+  x.fillStyle='#fff';circ(bx,by-bz*.5,.35+bz*.03,true);x.restore();
+  const m=Math.floor(s.left/60),sec=String(Math.floor(s.left%60)).padStart(2,'0');
+  document.getElementById('hud').innerHTML=`<span style="color:${COL.A}">A ${s.score.A}</span> - <span style="color:${COL.B}">${s.score.B} B</span> &nbsp; ${m}:${sec}${s.paused?' &nbsp; PAUSED':''}`;
+  document.getElementById('ev').textContent=s.events.slice(-1)[0]||'';
+  const pk=document.getElementById('pick');if(!pk.children.length)for(const[id]of s.players){const b=document.createElement('button');b.textContent=id;b.onclick=()=>pick(id);pk.appendChild(b)}
+}
+const TITLE={intent:'Movement decision',action:'Ball decision',pass_target:'Pass target'};
+const STATS={FWD:[['goals','Goals'],['assists','Assists'],['passes','Passes'],['acc','Pass accuracy'],['progressive','Progressive passes']],
+ DEF:[['interceptions','Interceptions'],['tackles_won','Tackles won'],['passes','Passes'],['acc','Pass accuracy'],['progressive','Progressive passes']],
+ GK:[['saves','Saves'],['passes','Passes'],['acc','Pass accuracy']]};
+function panel(s){
+  if(!sel||!s.detail[sel])return;const d=s.detail[sel],st=d.st;
+  const v={...st,passes:`${st.passes_ok} / ${st.passes}`,acc:st.passes?Math.round(100*st.passes_ok/st.passes)+'%':'–'};
+  let h=`<h4 style="margin-top:6px;color:#fff;font-size:16px">${sel} · ${d.role} · team ${sel[0]}</h4>`;
+  for(const[q,rows]of Object.entries(d.info))h+=`<h4>${TITLE[q]||q}</h4>`+rows.map(([l,p],i)=>`<div class="row${i?'':' top'}"><i style="width:${p}%"></i><span><span>${l}</span><span>${p}%</span></span></div>`).join('');
+  if(d.auto)h+=`<h4>Engine rule: closest player to a loose ball chases it</h4>`;
+  h+=`<h4>Match stats</h4><div class="grid">`+(STATS[d.role]||STATS.DEF).map(([k,n])=>`<div><small>${n}</small>${v[k]}</div>`).join('')+`</div>`;
+  if(h!==shown){document.getElementById('panel').innerHTML=h;shown=h}
+}
+</script>
